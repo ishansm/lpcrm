@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env
+
+# OS
+.DS_Store
+
+# Output data
+output/*
+!output/.gitkeep
+extracted_profiles.json
+filter_results.json
+scored_results.json
+rationale_results.json

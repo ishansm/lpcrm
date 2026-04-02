@@ -1,0 +1,15 @@
+{
+  "name": "India Deeptech Fund",
+  "fund_size": "$20M",
+  "stage": "pre-seed/seed",
+  "geography": "India, Indian founders",
+  "manager_type": "first-time fund manager",
+  "sectors": ["deeptech", "AI", "hardware", "defense", "bio/lifesciences"],
+  "broader_geo": ["emerging markets", "Africa", "Latin America", "SEA"],
+  "lp_product_category": "Category 3 — emerging, small, early-stage Indian VC",
+  "key_traits": [
+    "Triple-contrarian: emerging geo + emerging manager + hard tech",
+    "Bottleneck at seed — few GPs can invest here",
+    "Ideal LP understands outlier dynamics, not checkbox allocation"
+  ]
+}
