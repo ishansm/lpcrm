@@ -13,6 +13,7 @@ Key design choices:
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import anthropic
 from config import EXTRACTION_MODEL
 
@@ -220,35 +221,47 @@ def extract_single(client, lp, gp_profile):
     return lp
 
 
-def extract_all(client, lps, gp_profile):
-    """Run extraction on all LPs. Returns the same list with 'extracted' added.
+def extract_all(client, lps, gp_profile, max_workers=5):
+    """Run extraction on all LPs in parallel. Returns the same list with 'extracted' added.
 
-    Skips LPs that already have an 'extracted' field (for resume after rate limits).
+    Skips LPs that already have a valid 'extracted' field (for resume after rate limits).
+    Uses ThreadPoolExecutor for I/O-bound parallelism.
     """
-    for i, lp in enumerate(lps):
-        # Skip if already extracted (resume support)
-        if lp.get("extracted") and "_parse_error" not in lp.get("extracted", {}):
-            conf = lp["extracted"].get("confidence_level", "?")
-            print(f"  [{i+1}/{len(lps)}] Skipping (already extracted): {lp['name']} (confidence={conf})")
-            continue
+    to_extract = [
+        lp for lp in lps
+        if not (lp.get("extracted") and "_parse_error" not in lp.get("extracted", {}))
+    ]
 
-        print(f"  [{i+1}/{len(lps)}] Extracting: {lp['name']}...")
-        try:
-            extract_single(client, lp, gp_profile)
-        except Exception as e:
-            print(f"    ERROR: {e}")
-            print(f"    Saving progress so far — re-run to resume remaining LPs.")
-            break
+    skipped = len(lps) - len(to_extract)
+    if skipped:
+        print(f"  Skipping {skipped} already-extracted LPs.")
 
-        if "_parse_error" in lp.get("extracted", {}):
-            print(f"    → PARSE ERROR: {lp['extracted']['_parse_error']}")
-        else:
-            conf = lp["extracted"].get("confidence_level", "?")
-            signals = len(lp["extracted"].get("conviction_signals", []))
-            print(f"    → confidence={conf}, conviction_signals={signals}")
+    print(f"  Extracting {len(to_extract)} LPs with {max_workers} parallel workers...\n")
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(extract_single, client, lp, gp_profile): lp
+            for lp in to_extract
+        }
+
+        for i, future in enumerate(as_completed(futures), start=1):
+            lp = futures[future]
+            try:
+                future.result()
+                if "_parse_error" in lp.get("extracted", {}):
+                    print(f"  [{i}/{len(to_extract)}] PARSE ERROR: {lp['name']}")
+                else:
+                    conf = lp["extracted"].get("confidence_level", "?")
+                    signals = len(lp["extracted"].get("conviction_signals", []))
+                    print(f"  [{i}/{len(to_extract)}] Done: {lp['name']} (confidence={conf}, signals={signals})")
+            except Exception as e:
+                print(f"  [{i}/{len(to_extract)}] ERROR on {lp['name']}: {e}")
 
     # Print summary
-    extracted_count = sum(1 for lp in lps if lp.get("extracted") and "_parse_error" not in lp.get("extracted", {}))
+    extracted_count = sum(
+        1 for lp in lps
+        if lp.get("extracted") and "_parse_error" not in lp.get("extracted", {})
+    )
     print(f"\n  Extracted: {extracted_count}/{len(lps)} LPs")
 
     return lps

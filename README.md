@@ -7,7 +7,7 @@ A Python pipeline that matches Limited Partners (LPs) to GP fund opportunities u
 The pipeline runs six stages in sequence:
 
 1. **Notion Reader** — Fetches LP records from a Notion database, including structured CRM fields (status, check size, location) and unstructured page content (call notes, meeting notes, embedded child pages).
-2. **Claude Extraction** — Sends each LP's raw data to Claude with the GP profile as context. Returns a structured JSON profile with 22+ fields: core preferences, contextual enrichment of every reference (funds, people, institutions, terms), investment pattern synthesis, signal source quality assessment, decision process, organizational dynamics, and competitive positioning.
+2. **Claude Extraction** — Sends each LP's raw data to Claude with the GP profile as context. Returns a structured JSON profile with 27 fields: core preferences, contextual enrichment of every reference (funds, people, institutions, terms), investment pattern synthesis, signal source quality assessment, decision process, organizational dynamics, and competitive positioning.
 3. **Hard Filters** — Four deterministic gates that reject LPs with hard disqualifiers: geographic exclusion, fund size mismatch, wrong asset class framework (PE/credit mindset), or 3+ cumulative negative signals. Absence of data is never treated as negative.
 4. **Weighted Scoring** — Seven criteria scored 0-10 each, weighted and summed to 100. Fully deterministic — no AI. Includes post-scoring modifiers for relationship-trust bonus, negative signal penalties, and signal source quality discounts.
 5. **Rationale Generation** — Sends the top-5 scored LPs and all rejected LPs to Claude for human-readable rationales written as 10-minute outreach prep briefs.
@@ -104,8 +104,8 @@ output/                JSON artifacts from each stage (gitignored)
 | Criterion | Weight | What it measures |
 |---|---|---|
 | Intellectual alignment | x1.75 | Venture-native thinking, emerging manager affinity, contrarian conviction |
-| Demonstrated behavior | x1.5 | Past investments in similar funds, geographies, stages — actions over words |
 | Relationship proximity | x1.65 | Trust depth, engagement level, CRM status, conviction signals |
+| Demonstrated behavior | x1.5 | Past investments in similar funds, geographies, stages — actions over words | 
 | Active intent | x1.4 | Explicitly stated interest matching GP geography, sectors, or stage |
 | Sector alignment | x1.3 | Overlap between LP sector interests and GP focus areas |
 | Geography match | x1.3 | Interest in GP target geography, discounted for template-sourced signals |

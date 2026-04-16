@@ -9,6 +9,7 @@ Uses the notion-client Python SDK (same as notion_reader.py).
 
 import json
 import os
+import re
 from datetime import date
 from notion_client import Client
 from config import NOTION_PARENT_PAGE_ID, WEIGHTS, GP_PROFILE
@@ -236,13 +237,30 @@ def build_rejected_blocks(rejected_lps):
     """Build blocks for the rejected LPs section."""
     blocks = [_heading_2("Excluded LPs — why not")]
 
+    GATE_LABELS = {
+        "geographic_exclusion": "LP geography excludes GP target",
+        "fund_size_mismatch": "Fund size mismatch — LP backs much larger funds",
+        "wrong_framework": "Wrong asset class framework — PE/credit thinking applied to venture",
+    }
+
     for r in rejected_lps:
         name = r["name"]
         near_miss = r.get("near_miss", False)
-        label = f" (near-miss)" if near_miss else ""
-        gate = r.get("reason", "")
+        label = " (near-miss)" if near_miss else ""
 
-        blocks.append(_heading_3(f"{name} — \u274c {gate}{label}"))
+        gate = r.get("gate", "")
+        reason = r.get("reason", "")
+
+        if gate in GATE_LABELS:
+            heading_label = GATE_LABELS[gate]
+        elif gate == "cumulative_negative":
+            match = re.match(r"(\d+)", reason)
+            count = match.group(1) if match else "Multiple"
+            heading_label = f"{count} active negative signals"
+        else:
+            heading_label = reason[:80] + ("..." if len(reason) > 80 else "")
+
+        blocks.append(_heading_3(f"{name} — \u274c {heading_label}{label}"))
         blocks.append(_paragraph(_rt(r.get("explanation", ""))))
 
     blocks.append(_divider())
@@ -314,6 +332,15 @@ def create_report_page(rationale_path="output/rationale_results.json",
     gp_profile = scored_data.get("gp_profile", GP_PROFILE)
     top5 = rationales.get("top_5", [])
     rejected = rationales.get("rejected", [])
+
+    # Inject gate field from scored_results into rationale rejected LPs
+    scored_rejected_by_name = {r["name"]: r for r in scored_data.get("rejected", [])}
+    for r in rejected:
+        scored_r = scored_rejected_by_name.get(r["name"], {})
+        if "gate" not in r and scored_r.get("gate"):
+            r["gate"] = scored_r["gate"]
+        if not r.get("reason") and scored_r.get("reason"):
+            r["reason"] = scored_r["reason"]
 
     scored_count = len(scored_data.get("scored", []))
     rejected_count = len(scored_data.get("rejected", []))
