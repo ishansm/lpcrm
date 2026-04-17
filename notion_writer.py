@@ -66,8 +66,15 @@ def _divider():
 
 
 def _toggle(summary_text, children):
+    # Defensive: ensure every child has "object": "block" set, in case a
+    # future caller passes a hand-built dict without it. Notion's API
+    # requires this field on all block objects.
+    normalized = [
+        {**child, "object": "block"} if isinstance(child, dict) else child
+        for child in children
+    ]
     return {"object": "block", "type": "toggle",
-            "toggle": {"rich_text": [_rt(summary_text)], "children": children}}
+            "toggle": {"rich_text": [_rt(summary_text)], "children": normalized}}
 
 
 def _table_row(cells):
