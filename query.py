@@ -23,6 +23,7 @@ import sys
 from datetime import date, datetime
 import anthropic
 from config import MODEL, ANTHROPIC_API_KEY, NOTION_PARENT_PAGE_ID, GP_PROFILE, output_path
+from extract import split_merged_quotes
 from notion_writer import get_notion_client, _rt, _paragraph, _heading_3, _divider
 import gp as gp_mod
 
@@ -99,6 +100,66 @@ def build_lp_summary(lp, score_record=None, rejection_record=None):
     if isinstance(pattern, dict) and pattern.get("buying_profile"):
         lines.append(f"buying_profile: {pattern['buying_profile']}")
 
+    # Decision-maker role — the authoritative "who is in charge" for this LP.
+    od = ext.get("organizational_dynamics", {})
+    if isinstance(od, dict):
+        dm = od.get("decision_maker")
+        if dm and dm != "unknown":
+            lines.append(f"decision_maker: {dm}")
+        dm_ev = od.get("evidence")
+        if dm_ev and dm_ev != "unknown":
+            lines.append(f"decision_maker_context: {dm_ev}")
+
+    # Contextual enrichment — people, institutions, funds, terms referenced
+    # in the notes. Prioritize person + institution entries; cap the rest.
+    ce = ext.get("contextual_enrichment", [])
+    if isinstance(ce, list) and ce:
+        def _ce_rank(entry):
+            t = entry.get("type") if isinstance(entry, dict) else None
+            return {"person": 0, "institution": 1, "fund": 2, "term": 3}.get(t, 4)
+        ordered = sorted(
+            [e for e in ce if isinstance(e, dict)], key=_ce_rank,
+        )
+        rendered = []
+        for e in ordered[:6]:
+            typ = e.get("type", "?")
+            ref = e.get("reference", "?")
+            ctx = e.get("context", "")
+            rel = e.get("relevance", "")
+            tail = ctx if ctx else rel
+            if ctx and rel and ctx != rel:
+                tail = f"{ctx} — {rel}"
+            if tail:
+                rendered.append(f"  [{typ}] {ref}: {tail}")
+        if rendered:
+            lines.append("contextual_enrichment:")
+            lines.extend(rendered)
+
+    return "\n".join(lines)
+
+
+def build_cross_gp_block(lp_name, cross_gp_record, gp_names, active_slug):
+    """Format cross-GP scores for one LP. Returns empty string if fewer than
+    two GPs have data — single-GP case is already covered by the main block."""
+    if not cross_gp_record or len(cross_gp_record) < 2:
+        return ""
+    lines = ["cross_gp_scores:"]
+    for slug in sorted(cross_gp_record.keys()):
+        rec = cross_gp_record[slug]
+        gp_name = gp_names.get(slug, slug)
+        marker = " *active*" if slug == active_slug else ""
+        if rec["status"] == "scored":
+            s = rec.get("scores", {})
+            score_str = " ".join(f"{k.split('_')[0]}={v}" for k, v in s.items())
+            lines.append(
+                f"  {slug} ({gp_name}){marker}: "
+                f"{rec['match_pct']}% match, rank #{rec['rank']} | {score_str}"
+            )
+        else:
+            lines.append(
+                f"  {slug} ({gp_name}){marker}: REJECTED "
+                f"[{rec.get('gate', '?')}] {rec.get('reason', '')}"
+            )
     return "\n".join(lines)
 
 
@@ -119,6 +180,10 @@ def load_profiles():
         if not ext or "_parse_error" in ext:
             skipped += 1
             continue
+        # Normalize quotes that were merged with bullet/pipe/em-dash at
+        # extraction time — older on-disk files predate the cleanup fix.
+        if isinstance(ext.get("key_quotes"), list):
+            ext["key_quotes"] = split_merged_quotes(ext["key_quotes"])
         usable.append(lp)
     return usable, skipped
 
@@ -138,6 +203,42 @@ def load_scoring():
         scored_by_name[s["name"]] = record
     rejected_by_name = {r["name"]: r for r in data.get("rejected", [])}
     return scored_by_name, rejected_by_name
+
+
+def load_cross_gp_scoring():
+    """Load output/scored_results_<slug>.json for every saved GP. Returns
+    (cross_gp_by_lp, gp_names) where cross_gp_by_lp[lp_name][slug] is:
+      {"status": "scored", "rank": int, "match_pct": float, "scores": {...}}
+      or
+      {"status": "rejected", "gate": str, "reason": str}
+    """
+    cross = {}
+    names = {}
+    for slug in gp_mod.list_slugs():
+        prof = gp_mod.load_profile(slug) or {}
+        names[slug] = prof.get("name", slug)
+        path = os.path.join("output", f"scored_results_{slug}.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+        for i, s in enumerate(data.get("scored", []), start=1):
+            cross.setdefault(s["name"], {})[slug] = {
+                "status": "scored",
+                "rank": i,
+                "match_pct": s.get("composite", {}).get("match_pct"),
+                "scores": s.get("scores", {}),
+            }
+        for r in data.get("rejected", []):
+            cross.setdefault(r["name"], {})[slug] = {
+                "status": "rejected",
+                "gate": r.get("gate"),
+                "reason": r.get("reason"),
+            }
+    return cross, names
 
 
 # ---------------------------------------------------------------------------
@@ -321,29 +422,42 @@ def cmd_match(arg, profiles):
         return "No loadable GP profiles."
 
     results = []
+    fell_back = []  # (slug, reason) for each GP where per-GP extraction didn't load
     for slug, gp_profile in gps:
-        # Load the GP-specific extraction if it exists — extraction is
-        # GP-context-aware so scoring must use the matching context.
-        from config import output_path as _output_path
+        # Load the GP-specific extraction — extraction is GP-context-aware
+        # so scoring must use the matching context. Track why we fell back
+        # (if we did) so the user knows which scores are approximate.
         extract_file = os.path.join(
             "output", f"extracted_profiles_{slug}.json"
         )
         lp_copy = None
-        if os.path.exists(extract_file):
+        fallback_reason = None
+        if not os.path.exists(extract_file):
+            fallback_reason = "no per-GP extraction file"
+        else:
             try:
                 with open(extract_file) as f:
                     candidates = json.load(f)
-                for c in candidates:
-                    if c.get("name") == lp["name"]:
-                        ext = c.get("extracted", {})
-                        if ext and "_parse_error" not in ext:
-                            lp_copy = copy.deepcopy(c)
-                        break
-            except (json.JSONDecodeError, OSError):
-                pass
-        # Fallback: use the currently-loaded extraction if no per-GP file
+                match = next(
+                    (c for c in candidates if c.get("name") == lp["name"]),
+                    None,
+                )
+                if match is None:
+                    fallback_reason = "LP not in per-GP file"
+                else:
+                    ext = match.get("extracted", {})
+                    if not ext:
+                        fallback_reason = "per-GP extraction empty"
+                    elif "_parse_error" in ext:
+                        fallback_reason = "per-GP extraction has parse error"
+                    else:
+                        lp_copy = copy.deepcopy(match)
+            except (json.JSONDecodeError, OSError) as e:
+                fallback_reason = f"per-GP file unreadable ({type(e).__name__})"
+
         if lp_copy is None:
             lp_copy = copy.deepcopy(lp)
+            fell_back.append((slug, fallback_reason))
 
         passed, rejected = apply_hard_filters([lp_copy], gp_profile)
         if rejected:
@@ -414,20 +528,13 @@ def cmd_match(arg, profiles):
     if skipped:
         lines.append(f"  (skipped: {', '.join(skipped)})")
 
-    # Note GPs where we fell back to loaded extraction instead of per-GP
-    missing_extractions = []
-    for slug, _ in gps:
-        extract_file = os.path.join(
-            "output", f"extracted_profiles_{slug}.json"
-        )
-        if not os.path.exists(extract_file):
-            missing_extractions.append(slug)
-    if missing_extractions:
+    # Flag GPs where we fell back to the active-GP extraction, for any reason.
+    if fell_back:
+        details = ", ".join(f"{slug} ({reason})" for slug, reason in fell_back)
         lines.append(
-            f"  ⚠ No per-GP extraction for: {', '.join(missing_extractions)}. "
-            f"Scores against these GPs use the currently-loaded extraction "
-            f"and may differ from main.py output. Run 'python3 main.py' "
-            f"under each GP for accurate scoring."
+            f"  ⚠ Used active-GP extraction for: {details}. "
+            f"Scores may differ from main.py output. Run 'python3 main.py' "
+            f"under each affected GP for accurate scoring."
         )
 
     return "\n".join(lines).rstrip()
@@ -437,7 +544,7 @@ def cmd_gp(arg):
     """Handle /gp subcommands. Returns (output_text, auto_reload)."""
     parts = arg.split(maxsplit=1) if arg else []
     sub = parts[0].lower() if parts else ""
-    sub_arg = parts[1].strip() if len(parts) > 1 else ""
+    sub_arg = parts[1].strip().strip('"\'') if len(parts) > 1 else ""
 
     if not sub:
         active = gp_mod.load_active()
@@ -584,7 +691,8 @@ def handle_slash(cmd, profiles, scored_by_name, rejected_by_name):
     """Return (output_text, should_clear_memory, should_exit, should_reload)."""
     parts = cmd.split(maxsplit=1)
     verb = parts[0].lower()
-    arg = parts[1] if len(parts) > 1 else ""
+    # Strip surrounding quotes so /match "ak asset" and /lp "weizmann" work.
+    arg = parts[1].strip().strip('"\'') if len(parts) > 1 else ""
 
     if verb == "/help":
         return HELP_TEXT, False, False, False
@@ -612,13 +720,36 @@ def handle_slash(cmd, profiles, scored_by_name, rejected_by_name):
 # LLM prompt
 # ---------------------------------------------------------------------------
 
-def build_system_prompt(lp_summaries):
+def build_system_prompt(lp_summaries, gp_names=None, active_slug=None):
     joined = "\n\n".join(lp_summaries)
+    gp_names = gp_names or {}
+    gp_roster_lines = []
+    for slug in sorted(gp_names.keys()):
+        marker = " *active*" if slug == active_slug else ""
+        gp_roster_lines.append(f"  - {slug} ({gp_names[slug]}){marker}")
+    gp_roster = "\n".join(gp_roster_lines) if gp_roster_lines else "  (none)"
 
     return f"""You are an internal chatbot for a venture capital fundraising partner. The partner is reading your answer in 20 seconds before an outreach call — be concise, specific, and honest about what the data does and does not cover.
 
+## CRITICAL: no fabrication
+Every specific fact in your answer must come from the extracted LP data below. Before writing any number, fund name, team size, portfolio breakdown, or role description, verify it appears verbatim in the LP's data.
+
+Forbidden fabrications include (but are not limited to):
+- Inventing portfolio compositions ("2 public managers and 1 legacy manager") that are not in past_investments or contextual_enrichment
+- Inventing team sizes ("10-12 person team") by conflating other numbers (e.g., "$10-12B AUM")
+- Inventing investment counts, check sizes, or fund names not present in the data
+- Synthesizing plausible-sounding details from adjacent facts
+
+If the data doesn't contain a specific detail, say "the data doesn't specify" or omit the claim entirely. It is always better to give a shorter, factually grounded answer than a longer, partially-invented one.
+
+When you cite a number or specific fund/person, you must be able to point to the exact field in the LP data where it came from.
+
+## GP roster
+The system has saved profiles for these GPs. Use the slug when you need a short handle; use the display name when addressing the partner:
+{gp_roster}
+
 ## LP data
-Each LP block starts with a status line (SCORED with rank, REJECTED with gate, or UNRANKED), followed by scoring data (if scored) or gate/reason (if rejected), then extracted intelligence fields.
+Each LP block starts with a status line (SCORED with rank, REJECTED with gate, or UNRANKED) for the ACTIVE GP, followed by scoring data or gate/reason, then extracted intelligence fields. If the LP has been scored against more than one GP, a `cross_gp_scores:` block appears at the end listing match %, rank, and per-criterion scores (or REJECTED + gate) for every GP.
 
 {joined}
 
@@ -629,28 +760,89 @@ Each LP block starts with a status line (SCORED with rank, REJECTED with gate, o
 - For rejection questions, name the gate and quote the reason.
 - When comparing two LPs, only list criteria where one scores STRICTLY HIGHER than the other. Ties are not wins — skip them.
 - "Unknown" fields mean missing data, not flexibility. Do not treat unknown geography_interests as "versatile" — treat it as "we don't know."
-- For numeric questions (median, average, sum) where raw dollar amounts are not in the data, fall back to category distribution (e.g. "3 Medium, 4 Big, 2 Small from crm_check_size") instead of refusing.
+- For statistical or numeric questions (median, mean, average, variance, sum, distribution), follow the "Statistics and numeric questions" section below — do not silently fall back to a distribution and call it a median.
 - If an LP name in the question is not in the LP data above, say plainly "X is not in the Vineyard CRM." Do NOT invent details. Example: if the user asks about "Blackstone" and there is no Blackstone block, answer "Blackstone is not in the Vineyard CRM."
-- LP profiles contain people's names in their contextual fields (e.g. "Ryan" at GEM, "Ben" at Weizmann, "Dylan" at Everblue, "Lindsay" at UVIMCO, "Marina" as a referrer). When the user asks about a person by first name, search ALL LP profiles (not just LP names) — check key_quotes, conviction_signals, note_taker_observations, and every other extracted field. If found, answer using that LP's data and name the LP they are associated with. Only say "not in the CRM" if the name doesn't appear anywhere in any profile.
+- LP profiles contain people's names in their contextual fields (e.g. "Ryan" at GEM, "Ben" at Weizmann, "Dylan" at Everblue, "Lindsay" at UVIMCO, "Marina" as a referrer). When the user asks about a person by first name, search ALL LP profiles (not just LP names) — check decision_maker, contextual_enrichment, conviction_signals, key_quotes, past_investments, and the free-text fields. If found, answer using that LP's data and name the LP they are associated with. Only say "not in the CRM" if the name doesn't appear anywhere in any profile.
+- When answering "who is <person>?" questions, use this strict priority — do NOT lead with lower-priority fields just because they contain the person's name:
+  1. **decision_maker + decision_maker_context** — the authoritative role/responsibility. If present, lead with this.
+  2. **contextual_enrichment `[institution]` entry for the LP itself** — the institution's size, structure, mandate. Use to set the "where" (e.g. "GEM, a $10-12B OCIO").
+  3. **conviction_signals + key_quotes** — use for what the person has said or committed to.
+  4. **past_investments, buying_profile** — use for what the person has actually backed.
+  5. **note_taker_observations** — use ONLY for internal team sentiment ("vibes well with us", "seems slow") and only if the user specifically asks about team impressions. NEVER lead a "who is X" answer with a note_taker_observations line. In particular, do not surface context-less references to people the user has no knowledge of (e.g. "he thought David was smart but his roommate is smarter") unless the user asked about that exact person.
+- Example of the correct structure for "who is Ryan?": first sentence names the role from decision_maker ("Ryan leads the emerging-manager mandate at GEM"), second sentence situates the institution from contextual_enrichment ("GEM is a $10-12B OCIO"), third sentence cites a key_quote or conviction_signal for stance toward this GP.
 - If the question is ambiguous (e.g. "who's interesting?"), ask for clarification instead of guessing.
 - Keep the answer short. Bullets are fine. No preamble like "Based on the data".
 
-## Reasoning about objections, risks, and concerns
-When the user asks about objections, risks, hesitations, concerns, or "what would make them say no" for a specific LP, do NOT limit yourself to explicitly stated objections in the extracted profile. The strongest objections are often revealed by LOW SCORES against the current GP, which indicate weak fit that the LP hasn't explicitly articulated. The extraction is GP-agnostic — the scores are what encode GP-specific fit.
+## Precision and grounding
+- Never use hedges like "likely", "probably", "seems to be", "appears to be", "all likely" for LP facts. If the data states something, state it plainly. If the data doesn't state it, say so. Hedges are a tell that you're extrapolating — stop and check whether the answer is actually grounded.
+- Before describing a fund name generically, check `contextual_enrichment` for that fund. If present, cite the enrichment verbatim. Example: for Charlie Goodacre's past_investments (Concept, Giant, Whitestar, Superseed, Isomer), the enrichment block has concrete one-line descriptors for each — USE THEM. Do not paraphrase them as "likely European emerging managers" when the data says "European venture fund".
+- `past_investments` can mix specific fund names (e.g. "Isomer", "Z47") with generic headcounts (e.g. "2 public managers", "1 legacy manager") and size tags (e.g. "$5M"). Render these distinctions faithfully. Do not treat "2 public managers" as if it were a named venture fund. Do not consolidate mixed entries as if they were all venture commitments.
+- `sector_interests` lists topics the LP discussed or expressed interest in during the call. It is NOT proof of past sector investments. Do not say "they invest in X" when X is only in sector_interests. For actual investment evidence, cite `past_investments`, `buying_profile`, or `contextual_enrichment`. If those are empty for a sector, say interest was stated but not demonstrated.
+- When the sector_alignment score is low (0-3) but sector_interests names the GP's sectors, that is the extraction flagging a mismatch between stated interest and demonstrated behavior. Do NOT reconcile by softening ("may not align perfectly"). State it as: "they flagged interest in AI/software but the score reflects a weak match with their actual buying profile."
 
-Score thresholds:
-- Per-criterion scores of 0-3 represent serious weaknesses and are legitimate objections to name.
-- Scores of 4-5 are moderate concerns worth flagging.
-- Scores of 6+ are not objections unless the user specifically asks about minor concerns.
+## Directness when the data is explicit
 
-Combine three sources of objection evidence, in order of priority:
-1. Low scores against the active GP — e.g. "Geography match 2/10 — no LatAm exposure and no stated LatAm interest".
-2. Extracted risk flags, negative_flags, and conflicting_signals — e.g. "Low bandwidth — unlikely to engage new managers".
-3. Explicit stated exclusions or concerns in quotes — e.g. "They said 'we don't do first-time managers'".
+When the extracted data explicitly states a preference or constraint, report it plainly. Do not soften it with diplomatic hedges when the data is unambiguous.
 
-Always cite the score number AND the criterion name when basing an objection on a low score. Example: "Main objection: geography fit. GEM scored 2/10 on geography_match for this GP — portfolio is US/Europe/India, no LatAm exposure."
+Examples of what NOT to do:
+- Data says: "focuses on sub-100M funds, sub-50M preferred"
+  Bad answer: "Currently focuses on sub-100M funds but has the capacity for larger commitments to the right managers."
+  Good answer: "Mandate is sub-100M funds, sub-50M preferred. A $200M fund is outside their stated scope."
 
-Only say "no major objections surfaced in the data" when ALL per-criterion scores are 7+ AND there are no stated exclusions or negative flags. This should be rare.
+- Data says: "Fund 1-2s increasingly preferred"
+  Bad answer: "Could scale up for Fund 2"
+  Good answer: "Explicit preference for Fund 1-2s. Fund 3+ would be a mandate stretch."
+
+- Data says: "emerging markets exclusion"
+  Bad answer: "May have limited appetite for emerging markets"
+  Good answer: "Explicit emerging markets exclusion."
+
+Softening is only correct when the data itself is ambiguous or contradictory. When the data is explicit and you soften it, you are misrepresenting the LP. The partner will walk into a meeting with the wrong expectation.
+
+Hedge words like "appears to," "may have," "could potentially," "has capacity for" are appropriate only when the underlying data supports uncertainty. When the data is clear, state what it says.
+
+## Statistics and numeric questions
+Before answering any statistical question (median, mean, average, variance, sum, distribution), classify the underlying field as NUMERIC or CATEGORICAL.
+- NUMERIC fields have ordered numeric values with meaningful intervals: per_criterion scores (0-10), match_pct, and numeric ranges inside `check_size_range` (e.g. "$5M-$10M", "$20M-$30M") or `min_fund_size` ("$100M").
+- CATEGORICAL fields have discrete labels with no defined numeric interval: `crm_check_size` (Small / Medium / Big / Personal), `framework_type`, `lp_type`, `timing_readiness`, `status`, `confidence`. `check_size_range` is mixed — some LPs have numeric ranges, others have bucket labels ("Medium", "Big") or descriptive text ("substantial backing").
+
+Rules:
+- A true median, mean, or variance CANNOT be computed on categorical data. If the user asks for one on a categorical field, you MUST open the answer with an explicit disclaimer like: "crm_check_size is categorical, not numeric, so a true median cannot be computed." Then give the closest useful answer: the distribution across categories and the MODE (most common). Label the mode as "mode" — never as "median". "Median falls in Medium" is wrong; "Mode = Medium" is right.
+- Mode ≠ median. Median requires ordering numeric values and picking the middle. Mode is the most frequent label. Do not conflate them.
+- When the user's question is scoped to SCORED LPs ("of the ranked LPs", "our top N", "the passed set", "the 11 scored LPs"), compute ONLY over the scored set. Never fold rejected LPs' numbers into a scored-LP statistic. Rejected LPs have their own blocks above; include them only if the user explicitly asks about rejected or all LPs.
+- When the user's question is scoped to ALL LPs or is ambiguous about scope, state which set you used ("across all 13 LPs in the CRM" or "across the 11 scored LPs only") so the partner knows what they're looking at.
+- For mixed fields like `check_size_range`, split the set before computing: LPs with numeric ranges go into the numeric calculation; LPs with bucket labels or descriptive text are listed separately. Never convert "Medium" into a dollar figure to force a numeric median.
+- Correct answer shape for "median check size of the scored LPs": open with "crm_check_size is categorical, not numeric — a true median cannot be computed." Then: "Distribution across N scored LPs: X Big, Y Medium, Z Personal. Mode = Medium. LPs with numeric check_size_range: [list each with its range]."
+
+## Cross-GP comparisons
+The `cross_gp_scores:` block in each LP shows how that LP scored against every saved GP. Use it directly when the user asks about a GP that isn't the active one — do NOT say "I don't have data on that GP" if the LP has a row for that slug.
+
+- Match the user's phrasing to a slug using the GP roster above. "India Deeptech" → india_deeptech; "US AI" or "US Infra" → us_infra; "European Biotech" or "Europe" → europe_biotech. If the phrasing is ambiguous across multiple slugs, ask which one.
+- When answering "why is X ranked #1 here but #4 there?", cite both per-criterion score lines from cross_gp_scores and identify which criteria drove the delta. Example: "geo=10 vs geo=2, sector=10 vs sector=5 — the US AI mandate matches Dziugas's portfolio; India Deeptech does not."
+- Extracted intelligence fields (sector_interests, quotes, observations, etc.) are loaded for the ACTIVE GP's extraction only. When reasoning about fit against a non-active GP, you may cite cross_gp_scores numbers and rejection gates freely, but be cautious using the extracted fields — they reflect the active GP's context. If a cross-GP question needs deep qualitative reasoning, say the partner should run `/match <lp>` for a GP-contextual breakdown, or switch the active GP with `/gp switch <slug>`.
+- For REJECTED rows in cross_gp_scores, cite the gate and reason verbatim. Do not speculate about scores that were never computed.
+
+## How to identify an LP's "main objection"
+
+An LP's main objection is the most severe blocker to them committing. Rank objection severity strictly in this order:
+
+1. **Explicit stated blockers (highest severity)** — things the LP or note-taker explicitly stated: "we don't do X", exclusions, bandwidth constraints, timing delays, internal friction. Pull from key_quotes, note_taker_observations, bandwidth field, timing_readiness field, and exclusions list.
+
+2. **Per-criterion scores of 0-3** — serious structural mismatches that indicate the LP cannot or will not fit. Cite the criterion name and the score.
+
+3. **Per-criterion scores of 4-5** — moderate concerns. Flag as secondary.
+
+**Per-criterion scores of 6, 7, 8, or 9 are NEVER objections.** A score of 6+ represents a moderate-to-strong fit on that dimension. It is not a concern. It is not a hesitation. It is not an objection. Do not frame it as one. Even if 6 is the lowest score on the scorecard, if nothing is below 6, the answer is "no major per-criterion objections."
+
+**Relationship_proximity is never an LP objection.** It is a Vineyard-side metric measuring how close WE are to the LP. A low relationship_proximity score means Vineyard hasn't built the relationship yet — it does not mean the LP is objecting to anything. Pipeline gap ≠ LP objection.
+
+**The answer protocol:**
+- If there is at least one level-1 stated blocker → lead with that
+- Else if there is at least one level-2 score (0-3) → lead with that score and criterion
+- Else if there is at least one level-3 score (4-5) → lead with that, framed as "moderate concern"
+- Else → say "No major objections surfaced in the data. This LP looks viable across all scored dimensions."
+
+Never lead with a score of 6+ as "the main objection." Never lead with relationship_proximity as "the main objection." Violating either of these rules is a critical bug in the answer.
 
 ## Conversation history
 You have the last 6 turns of conversation history. Use it to resolve pronouns (he/she/they/his/her/their) and references like "that LP", "the top one", "him" — bind them to the LP most recently discussed. Only ask for clarification if the reference is still genuinely ambiguous after checking history.
@@ -681,20 +873,31 @@ def _load_all():
     """Load everything and build the system prompt. Returns a state dict."""
     profiles, skipped = load_profiles()
     scored_by_name, rejected_by_name = load_scoring()
-    summaries = [
-        build_lp_summary(
+    cross_gp_by_lp, gp_names = load_cross_gp_scoring()
+    active_slug = gp_mod.load_active()
+    summaries = []
+    for lp in profiles:
+        summary = build_lp_summary(
             lp,
             score_record=scored_by_name.get(lp["name"]),
             rejection_record=rejected_by_name.get(lp["name"]),
         )
-        for lp in profiles
-    ]
+        cross = build_cross_gp_block(
+            lp["name"], cross_gp_by_lp.get(lp["name"], {}),
+            gp_names, active_slug,
+        )
+        if cross:
+            summary += "\n" + cross
+        summaries.append(summary)
     return {
         "profiles": profiles,
         "skipped": skipped,
         "scored_by_name": scored_by_name,
         "rejected_by_name": rejected_by_name,
-        "system_prompt": build_system_prompt(summaries),
+        "cross_gp_by_lp": cross_gp_by_lp,
+        "gp_names": gp_names,
+        "active_slug": active_slug,
+        "system_prompt": build_system_prompt(summaries, gp_names, active_slug),
     }
 
 

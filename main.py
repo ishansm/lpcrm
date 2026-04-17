@@ -39,10 +39,10 @@ def main():
     print("STAGE 2: Extracting structured profiles (Claude)")
     print("=" * 60)
 
-    from extract import extract_all
+    from extract import extract_all, load_base_cache, BASE_PATH
     extract_path = output_path("extracted_profiles.json")
 
-    # Resume support: restore previously extracted LPs
+    # Resume support: restore previously extracted LPs for the active GP.
     if os.path.exists(extract_path):
         with open(extract_path) as f:
             existing = {
@@ -58,7 +58,17 @@ def main():
         if restored:
             print(f"  Restored {restored} previously extracted LPs.\n")
 
-    extract_all(client, lps, GP_PROFILE, save_path=extract_path)
+    # GP-agnostic base cache — shared across GP profiles so switching GP
+    # only re-runs the small GP-fit pass. Hydrated from any LPs already
+    # extracted (for this or prior GP) so we never redo Phase 1 unneeded.
+    base_cache = load_base_cache()
+
+    extract_all(
+        client, lps, GP_PROFILE,
+        save_path=extract_path,
+        base_cache=base_cache,
+        base_save_path=BASE_PATH,
+    )
 
     with open(extract_path, "w") as f:
         json.dump(lps, f, indent=2, default=str)
