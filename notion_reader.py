@@ -206,20 +206,19 @@ def find_child_pages(blocks):
 def get_title(prop):
     if not prop or not prop.get("title"):
         return ""
-    return "".join(t.get("plain_text", "") for t in prop["title"]).strip()
+    return "".join(t.get("plain_text", "") for t in prop["title"])
 
 
 def get_select(prop):
     if not prop or not prop.get("select"):
         return None
-    name = prop["select"].get("name")
-    return name.strip() if name else None
+    return prop["select"].get("name")
 
 
 def get_multi_select(prop):
     if not prop or not prop.get("multi_select"):
         return []
-    return [ms["name"].strip() for ms in prop["multi_select"] if ms.get("name")]
+    return [ms["name"] for ms in prop["multi_select"]]
 
 
 def get_email(prop):
