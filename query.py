@@ -53,7 +53,6 @@ def build_lp_summary(lp, score_record=None, rejection_record=None):
             f"composite: weighted_total={comp.get('weighted_total')} "
             f"penalty={comp.get('penalty', 0)} "
             f"relationship_trust_bonus={comp.get('relationship_trust_bonus', 0)} "
-            f"near_commitment_bonus={comp.get('near_commitment_bonus', 0)} "
             f"final={comp.get('total')}"
         )
         if scores:
@@ -206,7 +205,7 @@ def cmd_rank(scored_by_name, profiles):
         ext = by_name.get(name, {}).get("extracted", {})
         bp = ext.get("investment_pattern", {}).get("buying_profile", "") if isinstance(ext.get("investment_pattern"), dict) else ""
         bp_short = (bp[:80] + "...") if len(bp) > 80 else bp
-        lines.append(f"  #{rank:<3}  {name:30s}  {pct}%  [{conf} confidence]  {bp_short}")
+        lines.append(f"  #{rank}  {name:30s}  {pct}%  [{conf} confidence]  {bp_short}")
     return "\n".join(lines)
 
 
@@ -322,29 +321,8 @@ def cmd_match(arg, profiles):
 
     results = []
     for slug, gp_profile in gps:
-        # Load the GP-specific extraction if it exists — extraction is
-        # GP-context-aware so scoring must use the matching context.
-        from config import output_path as _output_path
-        extract_file = os.path.join(
-            "output", f"extracted_profiles_{slug}.json"
-        )
-        lp_copy = None
-        if os.path.exists(extract_file):
-            try:
-                with open(extract_file) as f:
-                    candidates = json.load(f)
-                for c in candidates:
-                    if c.get("name") == lp["name"]:
-                        ext = c.get("extracted", {})
-                        if ext and "_parse_error" not in ext:
-                            lp_copy = copy.deepcopy(c)
-                        break
-            except (json.JSONDecodeError, OSError):
-                pass
-        # Fallback: use the currently-loaded extraction if no per-GP file
-        if lp_copy is None:
-            lp_copy = copy.deepcopy(lp)
-
+        # Deep copy so filter's flag mutations don't carry across iterations
+        lp_copy = copy.deepcopy(lp)
         passed, rejected = apply_hard_filters([lp_copy], gp_profile)
         if rejected:
             r = rejected[0]
@@ -413,22 +391,6 @@ def cmd_match(arg, profiles):
 
     if skipped:
         lines.append(f"  (skipped: {', '.join(skipped)})")
-
-    # Note GPs where we fell back to loaded extraction instead of per-GP
-    missing_extractions = []
-    for slug, _ in gps:
-        extract_file = os.path.join(
-            "output", f"extracted_profiles_{slug}.json"
-        )
-        if not os.path.exists(extract_file):
-            missing_extractions.append(slug)
-    if missing_extractions:
-        lines.append(
-            f"  ⚠ No per-GP extraction for: {', '.join(missing_extractions)}. "
-            f"Scores against these GPs use the currently-loaded extraction "
-            f"and may differ from main.py output. Run 'python3 main.py' "
-            f"under each GP for accurate scoring."
-        )
 
     return "\n".join(lines).rstrip()
 
@@ -722,13 +684,7 @@ def main():
         if not question:
             continue
 
-        # Defensive: strip leading whitespace, stray prompt chars, or quote
-        # marks that can slip in when pasting or from terminal buffer quirks.
-        cleaned = question.lstrip(" >\t\"'").strip()
-
-        if cleaned.startswith("/"):
-            # Rebind so downstream handlers see the cleaned command.
-            question = cleaned
+        if question.startswith("/"):
             # /save is handled here because it needs session state
             parts = question.split(maxsplit=1)
             if parts[0].lower() == "/save":

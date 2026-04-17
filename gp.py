@@ -168,14 +168,12 @@ def cmd_switch(slug, offer_rerun=True):
     print(f"Active GP is now: {slug} ({prof.get('name', '?')})")
     if offer_rerun and prev and prev != slug:
         print(f"\nThe pipeline was last run against: {prev}")
-        print(f"Your output/ files for '{slug}' may be stale or missing.")
         ans = input("Do you want to re-run the pipeline now? (y/n/later): ").strip().lower()
         if ans == "y":
             print("\nRunning python3 main.py ...\n")
             subprocess.run([sys.executable, "main.py"])
         else:
-            print(f"\u26a0 Reminder: query.py will read stale/old data for '{slug}' "
-                  f"until you run 'python3 main.py'.")
+            print("Run python3 main.py when ready.")
 
 
 def cmd_delete(slug):
