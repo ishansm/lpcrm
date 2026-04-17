@@ -58,7 +58,7 @@ def main():
         if restored:
             print(f"  Restored {restored} previously extracted LPs.\n")
 
-    extract_all(client, lps, GP_PROFILE)
+    extract_all(client, lps, GP_PROFILE, save_path=extract_path)
 
     with open(extract_path, "w") as f:
         json.dump(lps, f, indent=2, default=str)

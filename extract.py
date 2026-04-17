@@ -199,24 +199,40 @@ def _call_extraction(client, prompt):
 def _post_extraction_cleanup(extracted):
     """Fix common extraction mistakes that the prompt can't fully prevent.
 
-    If the same topic appears in both exclusions and open_questions, the LP
-    is open to discussing it — remove it from exclusions. "Didn't do FoFs"
-    + "will chat internally" = open question, not a hard refusal.
+    If an exclusion is substantially redundant with an open_question (most of
+    its content words appear in a single open_question), drop it — the LP is
+    open to discussing it, so it's not a hard refusal.
     """
     exclusions = extracted.get("exclusions", [])
     open_questions = extracted.get("open_questions", [])
     if not exclusions or not open_questions:
         return
 
-    oq_text = " ".join(open_questions).lower()
+    STOP_WORDS = {"will", "wont", "don", "not", "the", "and", "for", "with",
+                  "any", "all", "our", "their", "them", "they", "that", "this",
+                  "have", "has", "had", "been", "into", "from", "about"}
+
+    def content_words(text):
+        return {w for w in text.lower().split()
+                if len(w) > 3 and w not in STOP_WORDS}
+
     cleaned = []
     for excl in exclusions:
-        # If the exclusion topic also appears in open_questions, it's not a hard refusal
-        excl_lower = excl.lower()
-        # Extract key terms from the exclusion to check against open_questions
-        if any(term in oq_text for term in excl_lower.split() if len(term) > 3):
-            continue  # drop — it's an open question, not an exclusion
-        cleaned.append(excl)
+        excl_words = content_words(excl)
+        if not excl_words:
+            cleaned.append(excl)
+            continue
+        # Drop only if a SINGLE open_question covers >=60% of the exclusion's
+        # content words. One-word overlap is not enough.
+        redundant = False
+        for oq in open_questions:
+            oq_words = content_words(oq)
+            overlap = excl_words & oq_words
+            if len(overlap) / len(excl_words) >= 0.6:
+                redundant = True
+                break
+        if not redundant:
+            cleaned.append(excl)
 
     extracted["exclusions"] = cleaned
 
@@ -230,7 +246,7 @@ def extract_single(client, lp, gp_profile):
     return lp
 
 
-def extract_all(client, lps, gp_profile, max_workers=5):
+def extract_all(client, lps, gp_profile, max_workers=5, save_path=None):
     """Run extraction on all LPs in parallel. Returns the same list with 'extracted' added.
 
     Skips LPs that already have a valid 'extracted' field (for resume after rate limits).
@@ -265,6 +281,16 @@ def extract_all(client, lps, gp_profile, max_workers=5):
                     print(f"  [{i}/{len(to_extract)}] Done: {lp['name']} (confidence={conf}, signals={signals})")
             except Exception as e:
                 print(f"  [{i}/{len(to_extract)}] ERROR on {lp['name']}: {e}")
+
+            # Incremental save — if anything crashes, we don't lose work.
+            if save_path:
+                try:
+                    import json as _json, os as _os
+                    _os.makedirs(_os.path.dirname(save_path) or ".", exist_ok=True)
+                    with open(save_path, "w") as _f:
+                        _json.dump(lps, _f, indent=2, default=str)
+                except Exception as _e:
+                    print(f"    (incremental save failed: {_e})")
 
     # Print summary
     extracted_count = sum(

@@ -9,7 +9,7 @@ All scoring references the GP profile dynamically.
 """
 
 import re
-from filter import parse_fund_size
+from filter import parse_fund_size  # noqa: A005 — local module, shadows builtin
 
 
 # ---------------------------------------------------------------------------
@@ -742,6 +742,26 @@ def compute_composite(scores, weights, lp=None, gp_profile=None):
     relationship_trust_bonus = 0
     bonus_skipped_reason = None
 
+    near_commitment_bonus = 0
+
+    # --- Near-commitment bonus (independent of sector/geo fit) ---
+    # If the LP is mid-commitment, reward that regardless of thematic fit.
+    # A verbal "90% committing" is more predictive than any scoring criterion.
+    if lp is not None:
+        ext = lp.get("extracted", {}) if isinstance(lp, dict) else {}
+        conviction_text = " ".join(ext.get("conviction_signals", [])).lower()
+        conviction_text += " " + " ".join(ext.get("key_quotes", [])).lower()
+        extreme_phrases = [
+            "90%", "committing to us", "all but committed",
+            "verbally committed", "will commit", "going to commit",
+            "ready to commit",
+        ]
+        extreme_hits = sum(1 for p in extreme_phrases if p in conviction_text)
+        if extreme_hits >= 2:
+            near_commitment_bonus = 10
+        elif extreme_hits == 1:
+            near_commitment_bonus = 5
+
     if phil >= 7 and rel >= 7 and intent <= 3:
         sector_geo_fit = scores["sector_alignment"] + scores["geography_match"]
         demo_behavior = scores["demonstrated_behavior"]
@@ -759,7 +779,7 @@ def compute_composite(scores, weights, lp=None, gp_profile=None):
             max_bonus = 7
             relationship_trust_bonus = round(trust_strength * max_bonus, 1)
 
-    final = weighted_total + total_penalty + relationship_trust_bonus
+    final = weighted_total + total_penalty + relationship_trust_bonus + near_commitment_bonus
     final = max(0, min(final, max_score))  # floor at 0, cap at max
 
     return {
@@ -768,6 +788,7 @@ def compute_composite(scores, weights, lp=None, gp_profile=None):
         "max": round(max_score, 1),
         "match_pct": round(final / max_score * 100, 1) if max_score > 0 else 0,
         "relationship_trust_bonus": relationship_trust_bonus,
+        "near_commitment_bonus": near_commitment_bonus,
         "bonus_skipped_reason": bonus_skipped_reason,
         "penalty": round(total_penalty, 1),
         "penalty_details": penalty_details,
@@ -864,7 +885,19 @@ if __name__ == "__main__":
             print(f"        Trust bonus:    {bonus:>+6.1f}  (phil={phil}, rel={rel}, intent={intent})")
         elif skip_reason:
             print(f"        Trust bonus:    {0.0:>+6.1f}  ({skip_reason})")
-        if comp.get("penalty", 0) < 0 or bonus > 0:
+        nc_bonus = comp.get("near_commitment_bonus", 0)
+        if nc_bonus > 0:
+            ext_nc = s["lp"].get("extracted", {})
+            nc_text = " ".join(ext_nc.get("conviction_signals", [])).lower()
+            nc_text += " " + " ".join(ext_nc.get("key_quotes", [])).lower()
+            nc_phrases = [
+                "90%", "committing to us", "all but committed",
+                "verbally committed", "will commit", "going to commit",
+                "ready to commit",
+            ]
+            matched = [p for p in nc_phrases if p in nc_text]
+            print(f"        Near-commit:    {nc_bonus:>+6.1f}  (matched: {', '.join(matched)})")
+        if comp.get("penalty", 0) < 0 or bonus > 0 or nc_bonus > 0:
             print(f"        Final score:    {comp['total']:>6.1f}/{comp['max']:.0f}")
 
         # Flags
