@@ -7,8 +7,8 @@ load_dotenv(override=True)
 # --- API Keys (from .env or environment) ---
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
-NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
-NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID")
+NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID", "3345d6a4e0dc817eb9ece2f97e21ba0c")
+NOTION_PARENT_PAGE_ID = os.environ.get("NOTION_PARENT_PAGE_ID", "3345d6a4e0dc807c872dd574d98c9d2d")
 
 # --- Models ---
 EXTRACTION_MODEL = "claude-sonnet-4-20250514"   # Used for extraction passes

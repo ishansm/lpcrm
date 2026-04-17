@@ -96,7 +96,7 @@ def _bulleted(text):
 # Page content builders
 # ---------------------------------------------------------------------------
 
-def build_header_blocks(gp_profile):
+def build_header_blocks(gp_profile, scored_count, rejected_count):
     """Build the header section with GP profile and pipeline metadata."""
     today = date.today().strftime("%B %d, %Y")
     return [
@@ -345,9 +345,12 @@ def create_report_page(rationale_path=None, scored_path=None):
         if not r.get("reason") and scored_r.get("reason"):
             r["reason"] = scored_r["reason"]
 
+    scored_count = len(scored_data.get("scored", []))
+    rejected_count = len(scored_data.get("rejected", []))
+
     # Build all blocks
     all_blocks = []
-    all_blocks.extend(build_header_blocks(gp_profile))
+    all_blocks.extend(build_header_blocks(gp_profile, scored_count, rejected_count))
 
     # Top 5 section
     all_blocks.append(_heading_2("Top 5 LP matches"))

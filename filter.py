@@ -191,11 +191,8 @@ def check_cumulative_soft_disqualifiers(lp, gp_profile):
         negative_flags.append(f"Timing: {timing} — not ready for near-term commitment")
 
     # Conflicting signals present (active contradiction in their own statements)
-    conflicting = (extracted.get("conflicting_signals") or "").strip()
-    if conflicting and conflicting.lower() not in (
-        "none", "no conflicting signals", "n/a", "no conflicts", "nothing"
-    ):
-        negative_flags.append(f"Conflicting signals: {conflicting[:100]}")
+    if extracted.get("conflicting_signals"):
+        negative_flags.append(f"Conflicting signals: {extracted['conflicting_signals'][:100]}")
 
     # Framework is traditional allocator (softer than PE/credit, but still active)
     if extracted.get("framework_type", "").lower() == "traditional-allocator":

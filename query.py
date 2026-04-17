@@ -15,7 +15,6 @@ Usage:
   > /exit
 """
 
-import copy
 import json
 import os
 import subprocess
@@ -321,8 +320,8 @@ def cmd_match(arg, profiles):
 
     results = []
     for slug, gp_profile in gps:
-        # Deep copy so filter's flag mutations don't carry across iterations
-        lp_copy = copy.deepcopy(lp)
+        # Shallow copy so filter's flag mutations don't carry across iterations
+        lp_copy = dict(lp)
         passed, rejected = apply_hard_filters([lp_copy], gp_profile)
         if rejected:
             r = rejected[0]
@@ -574,7 +573,7 @@ def handle_slash(cmd, profiles, scored_by_name, rejected_by_name):
 # LLM prompt
 # ---------------------------------------------------------------------------
 
-def build_system_prompt(lp_summaries):
+def build_system_prompt(lp_summaries, scoring_available):
     joined = "\n\n".join(lp_summaries)
 
     return f"""You are an internal chatbot for a venture capital fundraising partner. The partner is reading your answer in 20 seconds before an outreach call — be concise, specific, and honest about what the data does and does not cover.
@@ -627,7 +626,7 @@ Choose the footer based on what the answer actually uses:
 Count the LPs actually cited by name in the answer, not the LPs loaded in context. The footer must be the last line of your response."""
 
 
-def ensure_footer(text):
+def ensure_footer(text, scoring_available):
     """Validate Claude included the footer; append a default if missing."""
     if any(m in text for m in FOOTER_MARKERS):
         return text
@@ -656,7 +655,7 @@ def _load_all():
         "skipped": skipped,
         "scored_by_name": scored_by_name,
         "rejected_by_name": rejected_by_name,
-        "system_prompt": build_system_prompt(summaries),
+        "system_prompt": build_system_prompt(summaries, bool(scored_by_name)),
     }
 
 
@@ -729,7 +728,7 @@ def main():
                 messages=messages,
             )
             answer = response.content[0].text.strip()
-            answer = ensure_footer(answer)
+            answer = ensure_footer(answer, bool(state["scored_by_name"]))
         except Exception as e:
             print(f"ERROR: {e}\n")
             continue
