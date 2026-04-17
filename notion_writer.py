@@ -12,7 +12,7 @@ import os
 import re
 from datetime import date
 from notion_client import Client
-from config import NOTION_PARENT_PAGE_ID, WEIGHTS, GP_PROFILE
+from config import NOTION_PARENT_PAGE_ID, WEIGHTS, GP_PROFILE, output_path
 
 
 def get_notion_client():
@@ -317,9 +317,12 @@ def build_methodology_blocks():
 # Main page creation
 # ---------------------------------------------------------------------------
 
-def create_report_page(rationale_path="output/rationale_results.json",
-                       scored_path="output/scored_results.json"):
+def create_report_page(rationale_path=None, scored_path=None):
     """Create the Notion report page. Returns the page URL."""
+    if rationale_path is None:
+        rationale_path = output_path("rationale_results.json")
+    if scored_path is None:
+        scored_path = output_path("scored_results.json")
 
     print(f"Loading rationale results from {rationale_path}...")
     with open(rationale_path) as f:

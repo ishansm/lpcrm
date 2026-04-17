@@ -1,0 +1,22 @@
+{
+  "name": "European Biotech Fund",
+  "fund_size": "$60M",
+  "stage": "Series A",
+  "geography": "UK, Germany, Switzerland, Nordics",
+  "manager_type": "second-time manager",
+  "sectors": [
+    "biotechnology",
+    "therapeutics",
+    "medical devices",
+    "digital health"
+  ],
+  "broader_geo": [
+    "Europe"
+  ],
+  "lp_product_category": "Pan-European Series A biotech fund targeting institutional LPs with venture experience and comfort with long-duration, capital-intensive healthcare investing",
+  "key_traits": [
+    "Captures value from world-class European academic biotech research that other regional funds miss due to fragmented national capital markets",
+    "Pan-European approach bridges capital gaps across borders in Series A biotech investing",
+    "Focus on capital-intensive, long-duration biotech investments with deep understanding of regulatory timelines"
+  ]
+}

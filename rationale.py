@@ -11,7 +11,7 @@ Uses MODEL (Sonnet) — this is simpler text generation, not nuanced extraction.
 import json
 import os
 import anthropic
-from config import MODEL, ANTHROPIC_API_KEY, GP_PROFILE
+from config import MODEL, ANTHROPIC_API_KEY, GP_PROFILE, output_path
 
 
 def build_rationale_prompt(scored_lps, rejected_lps, gp_profile):
@@ -185,8 +185,10 @@ CRITICAL CITATION RULE: Every citation in key_citations must be an EXACT verbati
 Return ONLY valid JSON. No markdown, no explanation, no wrapping."""
 
 
-def generate_rationales(scored_path="output/scored_results.json"):
-    """Load scored results, generate rationales, save to output/rationale_results.json."""
+def generate_rationales(scored_path=None):
+    """Load scored results, generate rationales, save to output/rationale_results_<slug>.json."""
+    if scored_path is None:
+        scored_path = output_path("scored_results.json")
 
     print(f"Loading scored results from {scored_path}...\n")
     with open(scored_path) as f:
@@ -229,11 +231,11 @@ def generate_rationales(scored_path="output/scored_results.json"):
         rationales = {"_parse_error": str(e), "_raw": raw_text[:2000]}
 
     # Save
-    output_path = os.path.join("output", "rationale_results.json")
+    rationale_out = output_path("rationale_results.json")
     os.makedirs("output", exist_ok=True)
-    with open(output_path, "w") as f:
+    with open(rationale_out, "w") as f:
         json.dump(rationales, f, indent=2, default=str)
-    print(f"\nSaved rationale results to {output_path}")
+    print(f"\nSaved rationale results to {rationale_out}")
 
     # Print summary
     if "top_5" in rationales:

@@ -104,7 +104,16 @@ Extract a structured profile from the raw CRM data below. This will be used to s
 ### Core profile fields
 1. Extract every field in the schema below from the data above.
 2. For each field, use ONLY what is explicitly stated or strongly implied. If the data doesn't say, use "unknown" or an empty list — do NOT fabricate.
-3. For "framework_type": Watch for PE/credit thinking applied to venture. Signs include: focus on IRR over TVPI, wanting downside protection, comparing to fixed income, focus on cash yield, asking about portfolio company revenue multiples rather than growth. This is a key disqualifier.
+3. For "framework_type": Classify based on how the LP actually behaves IN VENTURE, not on other asset classes they also touch. Many family offices and institutional allocators run venture, PE, and credit side-by-side — what matters is how they think when deploying venture capital specifically.
+
+   Classify as:
+   - **'venture-native'**: LP's venture investments show thesis-first, emerging-manager, early-stage, power-law thinking. Signs: backs first-time funds, small fund sizes, pre-seed/seed focus, "find early be first believer" language, comfortable with concentration, accepts long hold periods, seeks small funds as alternatives to tier-1 established managers. An LP who also does PE/buyout elsewhere is STILL venture-native if their venture activity looks like this.
+   - **'pe-crossover'**: LP applies PE/buyout thinking TO their venture investments specifically. Signs: focus on IRR over TVPI, wants downside protection in venture deals, compares venture to fixed income, focuses on cash yield from venture, analyzes portfolio companies by revenue multiples rather than growth trajectory, prefers later-stage "proven" companies framed as de-risked, uses phrases like "pseudo-PE strategies" or "growth PE" to describe venture activity.
+   - **'credit-mindset'**: LP evaluates venture through a credit/fixed-income lens. Signs: obsessed with drawdown, capital preservation, yield expectations for venture, stable return profiles.
+   - **'traditional-allocator'**: LP follows institutional allocation frameworks — checkbox diversification, strict policy-driven decisions, avoids concentrated bets. Not wrong per se, but not sharp venture thinking either.
+   - **'unknown'**: Insufficient data to classify.
+
+   CRITICAL: Do NOT classify as 'pe-crossover' just because an LP mentions PE, buyout, or credit in their overall mandate or past investments. The question is how they think about VENTURE specifically. Example: an LP who says "we do $3M checks into small venture funds as a Sequoia alternative, find early be first believer" is venture-native, even if they also run a $500M PE book. By contrast, an LP who says "we apply our PE diligence framework to venture, focus on downside protection and IRR in our venture deals" is pe-crossover, even if they call themselves a venture investor.
 4. For "key_quotes": Pull up to 3 verbatim quotes from the call notes that reveal the LP's intent, preferences, or objections. These will be cited in the final report. Only quote what's actually written — never paraphrase or fabricate.
 5. For "conviction_signals": What evidence suggests this LP would actually commit to a fund matching the GP opportunity described above? Be specific.
 6. For "conflicting_signals": Note anything that contradicts itself (e.g., states interest in a geography but has an explicit exclusion against it).
@@ -277,11 +286,11 @@ def extract_all(client, lps, gp_profile, max_workers=5):
 if __name__ == "__main__":
     import sys
     import os
-    from config import GP_PROFILE, NOTION_DATABASE_ID, ANTHROPIC_API_KEY
+    from config import GP_PROFILE, NOTION_DATABASE_ID, ANTHROPIC_API_KEY, output_path
     from notion_reader import fetch_all_lps, fetch_lp_by_name
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    output_path = os.path.join("output", "extracted_profiles.json")
+    extract_out = output_path("extracted_profiles.json")
 
     if len(sys.argv) > 1 and sys.argv[1] != "--all":
         # Single LP mode — print only, no save
@@ -296,8 +305,8 @@ if __name__ == "__main__":
         # All LPs — extract and save (with resume support)
         # Load existing progress if available
         existing = {}
-        if os.path.exists(output_path):
-            with open(output_path) as f:
+        if os.path.exists(extract_out):
+            with open(extract_out) as f:
                 for prev_lp in json.load(f):
                     if prev_lp.get("extracted") and "_parse_error" not in prev_lp.get("extracted", {}):
                         existing[prev_lp["name"]] = prev_lp
@@ -319,9 +328,9 @@ if __name__ == "__main__":
         extract_all(client, lps, GP_PROFILE)
 
         os.makedirs("output", exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(extract_out, "w") as f:
             json.dump(lps, f, indent=2, default=str)
-        print(f"\nSaved extracted profiles to {output_path}")
+        print(f"\nSaved extracted profiles to {extract_out}")
 
         for lp in lps:
             conf = lp.get("extracted", {}).get("confidence_level", "?")

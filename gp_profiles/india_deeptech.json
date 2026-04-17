@@ -1,0 +1,25 @@
+{
+  "name": "India Deeptech Fund",
+  "fund_size": "$20M",
+  "stage": "pre-seed/seed",
+  "geography": "India",
+  "manager_type": "first-time fund manager",
+  "sectors": [
+    "deeptech",
+    "AI",
+    "hardware",
+    "defense",
+    "bio/lifesciences"
+  ],
+  "broader_geo": [
+    "Africa",
+    "Latin America",
+    "SEA"
+  ],
+  "lp_product_category": "Emerging, small, early-stage Indian VC focused on deeptech and hard tech sectors",
+  "key_traits": [
+    "Triple-contrarian bet combining emerging geography, emerging manager, and hard tech",
+    "Addresses bottleneck at seed stage where few GPs can invest in deeptech",
+    "Targets outlier dynamics rather than checkbox allocation strategies"
+  ]
+}
