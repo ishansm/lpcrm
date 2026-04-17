@@ -734,30 +734,17 @@ def compute_composite(scores, weights, lp=None, gp_profile=None):
     if lp and gp_profile:
         total_penalty, penalty_details = compute_penalties(lp, gp_profile)
 
-    # Sliding relationship-trust bonus — gated by minimum GP-specific fit
+    # Sliding relationship-trust bonus
     phil = scores["intellectual_alignment"]
     rel = scores["relationship_proximity"]
     intent = scores["active_intent"]
 
-    relationship_trust_bonus = 0
-    bonus_skipped_reason = None
-
     if phil >= 7 and rel >= 7 and intent <= 3:
-        sector_geo_fit = scores["sector_alignment"] + scores["geography_match"]
-        demo_behavior = scores["demonstrated_behavior"]
-
-        if sector_geo_fit < 10:
-            bonus_skipped_reason = (
-                f"Trust bonus skipped: sector+geo fit too low ({sector_geo_fit}/20, need >=10)"
-            )
-        elif demo_behavior < 5:
-            bonus_skipped_reason = (
-                f"Trust bonus skipped: insufficient demonstrated behavior ({demo_behavior}/10)"
-            )
-        else:
-            trust_strength = ((phil - 6) + (rel - 6)) / 8  # 0.25 to 1.0
-            max_bonus = 7
-            relationship_trust_bonus = round(trust_strength * max_bonus, 1)
+        trust_strength = ((phil - 6) + (rel - 6)) / 8  # 0.25 to 1.0
+        max_bonus = 7
+        relationship_trust_bonus = round(trust_strength * max_bonus, 1)
+    else:
+        relationship_trust_bonus = 0
 
     final = weighted_total + total_penalty + relationship_trust_bonus
     final = max(0, min(final, max_score))  # floor at 0, cap at max
@@ -768,7 +755,6 @@ def compute_composite(scores, weights, lp=None, gp_profile=None):
         "max": round(max_score, 1),
         "match_pct": round(final / max_score * 100, 1) if max_score > 0 else 0,
         "relationship_trust_bonus": relationship_trust_bonus,
-        "bonus_skipped_reason": bonus_skipped_reason,
         "penalty": round(total_penalty, 1),
         "penalty_details": penalty_details,
     }
@@ -785,10 +771,10 @@ def compute_composite(scores, weights, lp=None, gp_profile=None):
 if __name__ == "__main__":
     import json
     import os
-    from config import GP_PROFILE, WEIGHTS, output_path
+    from config import GP_PROFILE, WEIGHTS
 
-    input_path = output_path("filter_results.json")
-    score_out = output_path("scored_results.json")
+    input_path = os.path.join("output", "filter_results.json")
+    output_path = os.path.join("output", "scored_results.json")
 
     if not os.path.exists(input_path):
         print(f"Missing {input_path}")
@@ -856,14 +842,11 @@ if __name__ == "__main__":
             for amount, reason in comp.get("penalty_details", []):
                 print(f"        Penalty:        {amount:>+6.1f}  ({reason})")
         bonus = comp.get("relationship_trust_bonus", 0)
-        skip_reason = comp.get("bonus_skipped_reason")
         if bonus > 0:
             phil = s["scores"]["intellectual_alignment"]
             rel = s["scores"]["relationship_proximity"]
             intent = s["scores"]["active_intent"]
             print(f"        Trust bonus:    {bonus:>+6.1f}  (phil={phil}, rel={rel}, intent={intent})")
-        elif skip_reason:
-            print(f"        Trust bonus:    {0.0:>+6.1f}  ({skip_reason})")
         if comp.get("penalty", 0) < 0 or bonus > 0:
             print(f"        Final score:    {comp['total']:>6.1f}/{comp['max']:.0f}")
 
@@ -913,6 +896,6 @@ if __name__ == "__main__":
         ],
         "rejected": rejected,
     }
-    with open(score_out, "w") as f:
+    with open(output_path, "w") as f:
         json.dump(save_data, f, indent=2, default=str)
-    print(f"\nSaved scored results to {score_out}")
+    print(f"\nSaved scored results to {output_path}")

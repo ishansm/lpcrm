@@ -79,14 +79,13 @@ def check_geographic_exclusion(lp, gp_geos):
         g in ("us", "usa", "united states", "north america", "domestic")
         for g in known_geos
     ):
-        # LP only invests domestically — only reject if GP has NO US focus.
-        # If GP targets US alongside other geos, US-only LP is still viable.
-        gp_includes_us = any(
-            g in ("us", "usa", "united states", "north america", "domestic")
+        # LP only invests domestically — check if GP needs non-US
+        gp_needs_non_us = any(
+            g not in ("us", "usa", "united states", "north america", "domestic")
             for g in gp_geos
         )
-        if not gp_includes_us:
-            return True, f"LP geography is US-only — GP has no US focus ({', '.join(gp_geos)})"
+        if gp_needs_non_us:
+            return True, f"LP geography is US-only — GP requires {', '.join(gp_geos)}"
 
     return False, ""
 
@@ -323,10 +322,10 @@ def apply_hard_filters(profiles, gp_profile):
 if __name__ == "__main__":
     import json
     import os
-    from config import GP_PROFILE, output_path
+    from config import GP_PROFILE
 
-    input_path = output_path("extracted_profiles.json")
-    filter_out = output_path("filter_results.json")
+    input_path = os.path.join("output", "extracted_profiles.json")
+    output_path = os.path.join("output", "filter_results.json")
 
     if not os.path.exists(input_path):
         print(f"Missing {input_path}")
@@ -383,6 +382,6 @@ if __name__ == "__main__":
             for r in rejected
         ],
     }
-    with open(filter_out, "w") as f:
+    with open(output_path, "w") as f:
         json.dump(save_data, f, indent=2, default=str)
-    print(f"\nSaved filter results to {filter_out}")
+    print(f"\nSaved filter results to {output_path}")

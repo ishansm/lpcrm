@@ -17,7 +17,7 @@ import json
 import os
 import time
 import anthropic
-from config import GP_PROFILE, NOTION_DATABASE_ID, ANTHROPIC_API_KEY, WEIGHTS, ACTIVE_GP_SLUG, output_path
+from config import GP_PROFILE, NOTION_DATABASE_ID, ANTHROPIC_API_KEY, WEIGHTS
 
 
 def main():
@@ -40,7 +40,7 @@ def main():
     print("=" * 60)
 
     from extract import extract_all
-    extract_path = output_path("extracted_profiles.json")
+    extract_path = os.path.join("output", "extracted_profiles.json")
 
     # Resume support: restore previously extracted LPs
     if os.path.exists(extract_path):
@@ -73,7 +73,7 @@ def main():
     passed, rejected_raw = apply_hard_filters(lps, GP_PROFILE)
 
     # Save in the format score.py and rationale.py expect
-    filter_path = output_path("filter_results.json")
+    filter_path = os.path.join("output", "filter_results.json")
     rejected_serialized = [
         {
             "name": r["lp"]["name"],
@@ -114,7 +114,7 @@ def main():
         })
     scored.sort(key=lambda x: x["composite"]["match_pct"], reverse=True)
 
-    score_path = output_path("scored_results.json")
+    score_path = os.path.join("output", "scored_results.json")
     with open(score_path, "w") as f:
         json.dump({
             "gp_profile": GP_PROFILE,
@@ -148,7 +148,7 @@ def main():
 
     from notion_writer import create_report_page
     page_url = create_report_page(
-        rationale_path=output_path("rationale_results.json"),
+        rationale_path=os.path.join("output", "rationale_results.json"),
         scored_path=score_path,
     )
 
@@ -172,10 +172,10 @@ def main():
     print(f"  Scored:         {len(scored)}")
     print(f"  Time:           {minutes}m {seconds}s")
     print(f"\n  Notion report:  {page_url}")
-    print(f"\n  Output files (GP: {ACTIVE_GP_SLUG}):")
+    print(f"\n  Output files:")
     for p in ("extracted_profiles.json", "filter_results.json",
               "scored_results.json", "rationale_results.json"):
-        print(f"    {output_path(p)}")
+        print(f"    output/{p}")
 
 
 if __name__ == "__main__":
